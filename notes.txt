@@ -1,0 +1,79 @@
+I've attached a profile of a database that contains price and other information for hundreds of stocks, etfs and stock indexes. Build a pytorch framework that trains on the data to predict the target variables in the table 'ma_future'. Use a time-series splitting approach on the training data, validate and test with held out data. Use whatever machine learning architecture is appropriate. Additional information about each table includes:
+
+equity_info: contains some fields such as sector and industry that is fixed for a stock but can be linked to the index in etf_info
+etf_info: has data about etf sector and industry
+indicies: says what index each stock is a member of
+price: has raw price data that probably can't be used without being standardized
+regression: has multiple regression events for each symbol/date combination, and shows where the strongest linear relationship exists between a start_data and a date. Use this to identify strong trends with R values closer to 1 and long n values. The values in column 'k' are the number of calendar days in the regression, while 'n' is the numebr of trading days
+regression_indicators: says where in the trends the price is relative to the regression line and the 1 standard deviation lines above and below
+regression_indicators_ma: smoothed versions of data in regression_indicators
+ta__change: provides the relationship of the price at each date going back a certain number of days
+ta__ma_ratio: provides the ratios of various moving averages for n different number of days
+talib: the calculated indictors for each date from the TALib library
+
+
+Build a full deep learning architecture, using embeddings as needed. Make the code easily modifiable and customizable so that columns can be added and removed from each step with a configuration file. Use time-series splitting, so that the model is trained on multiple splits of previous data to reduce the effect of broader market trends. The goal is the best predict the target future values of the more recent data. For each training run, create a JSON output of all the training metrics and settings, such as the number of epochs and the time series split sizes. The project should be a well formatted python project, but keep the code simple and easy to read. It should use good practices like type hinting.
+
+Create a diagram that explains this project, mapping how each input parameter and data table is used, and the architecture of the torch training and prediction model
+
+Add scripts that plot all the results from each training prediction run. For each target variable, plot the 
+changes in metric over each epoch, and any other metrics that are relavent to this type of model. For the prediction output,
+plot the confidence of each prediction for symbol and date for each target variable. Try to create a simple plot that makes 
+it easy to find the symbols with the best predicted output. 
+
+Additional guidelines: 
+1) Use all 9 columns from the "regression_indicators" table
+2) Use the regression_indicators_ma table with the regression_indicators table
+3) Make plots that display the details of every prediction parameter, not just confidence
+4)  Make it so that you can pass a date range explicitly to this function and only predict on that data
+5) Create documentation for every file and function in a separate document
+6) Create a folder called "predictions" that will hold the prediction results, and create a new folder with a timestamped name for that folder. Create a copy of the config file in the prediction folder for trackability. 
+7) Use the following mappings to incorporate sector and broad market ETF prices into the model. Each stock has a sector, and each sector has its own ETF. For instance, the ETF "VDE" is for energy prices, and matches any stock with "energy" in the sector_key column in equity_info table. Additionally, there are ETFs for other purposes such as the broad market, technology and medium and short term futures. For each symbol and date, incorporate the relevent sector ETF, and the other broad ETF data. Add these mappings to the overall config file so they can be updated later if the ETF symbol changes. 
+
+
+["sector_etfs"]
+basic-materials = "VAW"
+communication-services = "VOX"
+consumer-cyclical = "VCR"
+consumer-defensive = "VDC"
+energy = "VDE"
+financial-services = "VFH"
+healthcare = "VHT"
+industrials = "VIS"
+real-estate = "VNQ"
+technology = "VGT"
+utilities = "VPU"
+
+["market_etfs"]
+sp500 = "VOO"
+nasdaq = "QQQ"
+
+["technical_etfs"]
+vix_midterm_futures = "VIXM"
+vix_shortterm_futures = "VIXY"
+
+
+
+
+
+
+
+
+
+
+
+uv venv
+uv init --no-readme .          # creates pyproject.toml (skips since README.md already exists)
+.venv\Scripts\activate
+uv pip install -r requirements.txt
+
+
+
+git init
+git add .
+git commit -m "Initial commit: PyTorch stock forecasting framework"
+
+
+git branch -M main
+git remote add origin https://github.com/alb202/stock-forecast.git
+git push -u origin main

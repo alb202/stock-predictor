@@ -1,0 +1,210 @@
+# =============================================================================
+# stock_predictor configuration
+#
+# This file is the single control surface for the project. Every column list
+# below can be edited to add/remove features without touching any Python
+# code -- the loader, preprocessor, dataset and model all read their column
+# lists from here (see stock_predictor/config.py for the loader, and
+# docs/CONFIG_GUIDE.md for a field-by-field explanation).
+#
+# Column lists marked "auto" mean: if left empty, the loader will
+# auto-detect every numeric column in that table (minus id columns) instead
+# of failing. This lets the project run against a real database even before
+# every column name below has been double-checked against your schema.
+# =============================================================================
+
+project:
+  name: "stock_predictor"
+  random_seed: 1337
+  predictions_dir: "predictions"     # timestamped run folders are created inside this
+  artifacts_dir: "artifacts"         # trained model weights + preprocessor state
+
+# -----------------------------------------------------------------------------
+# Where the profiled tables actually live. `duckdb` is used as the query
+# engine for every source type (including sqlite, via the sqlite_scanner
+# extension) so the rest of the code only ever has to deal with one API.
+# -----------------------------------------------------------------------------
+data_source:
+  type: "duckdb"                     # one of: duckdb | sqlite | parquet_dir | csv_dir
+  path: "data/market.duckdb"         # file path for duckdb/sqlite, directory for *_dir
+  # Optional universe / history filters applied at query time (keeps the
+  # materialized pandas frame a manageable size for a laptop/CI run).
+  symbols: []                        # empty = all symbols
+  start_date: null                   # e.g. "2010-01-01"; null = earliest available
+  end_date: null                     # null = latest available
+  max_rows: null                     # optional hard cap for smoke-testing
+
+# -----------------------------------------------------------------------------
+# Table schema: id columns (join keys), categorical columns to embed, numeric
+# feature columns, and (for ma_future only) target columns.
+# -----------------------------------------------------------------------------
+tables:
+
+  price:
+    table_name: "price"
+    id_columns: ["symbol", "date"]
+    numeric_columns: ["close", "volume"]
+
+  equity_info:
+    table_name: "equity_info"
+    id_columns: ["symbol"]
+    categorical_columns: ["sector_key", "industry_key"]
+    # sector_key drives the sector-ETF join in etf_mappings.sector_etfs below.
+    numeric_columns: []
+
+  etf_info:
+    table_name: "etf_info"
+    id_columns: ["symbol"]
+    categorical_columns: ["category_key"]
+    numeric_columns: []
+
+  indicies:
+    table_name: "indicies"
+    id_columns: ["symbol", "index_name"]
+    # Multi-row per symbol (a stock can sit in several indices). The loader
+    # mean-pools an embedding over every index a symbol belongs to.
+    categorical_columns: ["index_name"]
+
+  regression:
+    table_name: "regression"
+    id_columns: ["symbol", "date", "start_date"]
+    # Multiple regression events per (symbol, date). The loader scores each
+    # by trend strength and keeps the single strongest one per (symbol, date)
+    # -- see regression_selection below.
+    numeric_columns: ["r_value", "slope", "intercept", "k", "n"]
+
+  regression_indicators:
+    table_name: "regression_indicators"
+    id_columns: ["symbol", "date", "start_date"]
+    # All 9 channel-position columns, per project requirement (1).
+    numeric_columns:
+      - "CHANNEL_CLOSE_VS_LINE"
+      - "CHANNEL_CLOSE_VS_LOWER"
+      - "CHANNEL_CLOSE_VS_UPPER"
+      - "CHANNEL_LOW_VS_LINE"
+      - "CHANNEL_LOW_VS_LOWER"
+      - "CHANNEL_LOW_VS_UPPER"
+      - "CHANNEL_HIGH_VS_LINE"
+      - "CHANNEL_HIGH_VS_LOWER"
+      - "CHANNEL_HIGH_VS_UPPER"
+
+  regression_indicators_ma:
+    table_name: "regression_indicators_ma"
+    id_columns: ["symbol", "date", "start_date"]
+    # Same 9 metrics, smoothed. Joined alongside regression_indicators
+    # per project requirement (2); auto-detected if names differ in your DB.
+    numeric_columns: []   # auto -> falls back to the regression_indicators list
+
+  ta__change:
+    table_name: "ta__change"
+    id_columns: ["symbol", "date"]
+    numeric_columns: []  # auto: all CHANGE_HIGH_*/CHANGE_LOW_*/CHANGE_CLOSE_* cols
+
+  ta__ma_ratio:
+    table_name: "ta__ma_ratio"
+    id_columns: ["symbol", "date"]
+    numeric_columns: []  # auto: all SMA_RATIO_*/EMA_RATIO_* cols
+
+  talib:
+    table_name: "talib"
+    id_columns: ["symbol", "date"]
+    numeric_columns: []  # auto: every remaining numeric TA-Lib indicator column
+
+  ma_future:
+    table_name: "ma_future"
+    id_columns: ["symbol", "date"]
+    # Leave empty to auto-detect every non-id numeric column as a target.
+    # Populate explicitly to train on a subset, e.g. ["FUTURE_RETURN_20"].
+    target_columns: []
+    exclude_columns: []   # columns to always drop even if auto-detected
+
+# -----------------------------------------------------------------------------
+# Requirement (7): sector / broad-market / volatility ETF context. For every
+# stock row, the loader looks up equity_info.sector_key, maps it to a sector
+# ETF symbol below, and joins that ETF's own feature row (same date) into the
+# sample. Every market_etfs and technical_etfs entry is joined for every row
+# regardless of sector. Update the symbol on the right if a fund is renamed.
+# -----------------------------------------------------------------------------
+etf_mappings:
+  sector_etfs:
+    basic-materials: "VAW"
+    communication-services: "VOX"
+    consumer-cyclical: "VCR"
+    consumer-defensive: "VDC"
+    energy: "VDE"
+    financial-services: "VFH"
+    healthcare: "VHT"
+    industrials: "VIS"
+    real-estate: "VNQ"
+    technology: "VGT"
+    utilities: "VPU"
+  market_etfs:
+    sp500: "VOO"
+    nasdaq: "QQQ"
+  technical_etfs:
+    vix_midterm_futures: "VIXM"
+    vix_shortterm_futures: "VIXY"
+  # Feature tables pulled in for each context ETF above (kept lean on
+  # purpose -- context branches are meant to summarize the *environment*,
+  # not duplicate the full feature set of the target symbol).
+  context_feature_tables: ["ta__change", "ta__ma_ratio"]
+
+# -----------------------------------------------------------------------------
+# How the strongest regression trend is chosen per (symbol, date) before
+# joining regression_indicators / regression_indicators_ma. Score is
+# abs(r_value) ** r_power * log1p(n) ** n_power; the highest-scoring event
+# per (symbol, date) wins. See stock_predictor/data/loader.py.
+# -----------------------------------------------------------------------------
+regression_selection:
+  r_power: 1.0
+  n_power: 1.0
+  min_n: 10          # discard events with fewer than this many trading days
+
+# -----------------------------------------------------------------------------
+# Preprocessing
+# -----------------------------------------------------------------------------
+preprocessing:
+  numeric_scaler: "standard"     # standard | robust
+  clip_std: 8.0                  # clip standardized values to +-clip_std
+  fill_value_after_scaling: 0.0  # imputation value for missing numeric cells
+  min_category_freq: 5           # rare categories collapse into an <UNK> bucket
+
+# -----------------------------------------------------------------------------
+# Time-series splitting (walk-forward, expanding window, with an embargo gap
+# so that no training label's forward-looking window overlaps a validation
+# or test feature date -- see stock_predictor/splits/time_series_split.py).
+# -----------------------------------------------------------------------------
+splitting:
+  n_splits: 5
+  val_days: 63          # ~1 trading quarter
+  test_days: 63          # final held-out block, evaluated once at the end
+  embargo_days: 21        # >= the longest forward horizon encoded in ma_future
+  min_train_days: 252     # require at least one year of history to start
+
+# -----------------------------------------------------------------------------
+# Model architecture
+# -----------------------------------------------------------------------------
+model:
+  categorical_embedding_dim: 8
+  branch_hidden_dims: [128, 64]     # per-table numeric branch encoder MLP
+  fusion_hidden_dims: [256, 128]    # shared trunk after branches are fused
+  fusion_attention: true            # gated attention pooling over branches
+  head_hidden_dim: 32               # per-target head MLP width
+  dropout: 0.2
+  predict_uncertainty: true         # heads output (mu, log_var) -> confidence
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1024
+  max_epochs: 60
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  early_stopping_patience: 8
+  lr_scheduler_patience: 4
+  lr_scheduler_factor: 0.5
+  grad_clip_norm: 1.0
+  num_workers: 2
+  loss: "gaussian_nll"     # gaussian_nll | mse (mse ignores predict_uncertainty)
+  device: "auto"           # auto | cpu | cuda | mps
